@@ -18,6 +18,7 @@ from modules.capital_budget import analyze_capital_budget
 from modules.cashflow import analyze_cash_flow
 from modules.income import analyze_income_and_working_capital
 from modules.ipo_checks import analyze_ipo_checks
+from modules.openai_extractor import extract_financials_with_openai
 from modules.report import build_pdf_report
 from modules.risk import analyze_risk
 from modules.scorer import score_investment
@@ -105,12 +106,13 @@ def main() -> None:
         else:
             input_method = st.radio("Input source", ["Manual / sample portfolio", "CSV/PDF upload"])
         anthropic_key = st.text_input("Claude API key", type="password", help="Optional. If blank, the app shows a deterministic memo.")
-        extraction_mode = st.selectbox("PDF extraction mode", ["Heuristic autoscan", "AI agent autoscan", "Hybrid autoscan"], index=2)
+        openai_key = st.text_input("OpenAI API key", type="password", help="Optional. Used for ChatGPT document/photo extraction.")
+        extraction_mode = st.selectbox("Document/photo extraction mode", ["Heuristic autoscan", "AI agent autoscan", "Hybrid autoscan"], index=2)
 
     st.title("SME Investment Analysis Workbench")
     st.caption("For professional pre-IPO and SME IPO screening across growth, margins, working capital, leverage, cash flow, valuation, capital budgeting, risk, and IPO-specific red flags.")
 
-    firms = collect_inputs(company_scope, input_method, horizon, anthropic_key, extraction_mode, analysis_years)
+    firms = collect_inputs(company_scope, input_method, horizon, anthropic_key, openai_key, extraction_mode, analysis_years)
     assumptions = firm_assumptions_editor(firms, sector)
     common_growth = st.slider("Portfolio projected annual FCF growth (%)", -20.0, 60.0, 18.0, 1.0)
 
@@ -181,12 +183,13 @@ def collect_inputs(
     input_method: str,
     horizon: int,
     anthropic_key: str | None,
+    openai_key: str | None,
     extraction_mode: str,
     analysis_years: int,
 ) -> list[dict[str, Any]]:
     drhp_text = ""
     if company_scope == "Multi company" and input_method == "CSV/PDF upload":
-        return collect_multi_firm_inputs(anthropic_key, extraction_mode, analysis_years)
+        return collect_multi_firm_inputs(anthropic_key, openai_key, extraction_mode, analysis_years)
     if company_scope == "Multi company":
         return [trim_firm_years(firm, analysis_years) for firm in sample_firms()]
 
@@ -196,10 +199,10 @@ def collect_inputs(
             return firms_from_csv(pd.read_csv(upload), upload.name.rsplit(".", 1)[0], analysis_years)
         st.info("Upload a CSV with the required financial columns. Sample data is loaded until then.")
     elif input_method == "PDF upload":
-        upload = st.file_uploader("Upload DRHP / financial statement PDF", type=["pdf"])
+        upload = st.file_uploader("Upload DRHP, financial statement PDF, or financial photo", type=["pdf", "png", "jpg", "jpeg", "webp"])
         if upload:
-            drhp_text = parse_pdf_text(upload)
-            extracted = extract_financials_from_document(upload, drhp_text, anthropic_key, extraction_mode)
+            drhp_text = parse_pdf_text(upload) if is_pdf(upload) else ""
+            extracted = extract_financials_from_document(upload, drhp_text, anthropic_key, openai_key, extraction_mode)
             st.success(f"Parsed {len(drhp_text):,} characters from PDF for red-flag scanning.")
             st.text_area("Parsed PDF text preview", drhp_text[:4000], height=160)
             if extracted["confidence"] > 0:
@@ -223,7 +226,7 @@ def collect_inputs(
     return [trim_firm_years(firm, analysis_years) for firm in sample_firms()[:1]]
 
 
-def collect_multi_firm_inputs(anthropic_key: str | None, extraction_mode: str, analysis_years: int) -> list[dict[str, Any]]:
+def collect_multi_firm_inputs(anthropic_key: str | None, openai_key: str | None, extraction_mode: str, analysis_years: int) -> list[dict[str, Any]]:
     st.markdown("Upload multiple firm documents. CSV files provide financial rows; PDF files add DRHP text and optional financial autoscan.")
     csv_uploads = st.file_uploader(
         "Upload one combined CSV or multiple firm CSVs",
@@ -231,7 +234,7 @@ def collect_multi_firm_inputs(anthropic_key: str | None, extraction_mode: str, a
         accept_multiple_files=True,
         help="A combined CSV can include a company/firm column. Separate CSV files use the file name as the firm name.",
     )
-    pdf_uploads = st.file_uploader("Upload DRHP / financial statement PDFs", type=["pdf"], accept_multiple_files=True)
+    pdf_uploads = st.file_uploader("Upload DRHP / financial statement PDFs or financial photos", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
     firms: list[dict[str, Any]] = []
     if csv_uploads:
@@ -243,9 +246,9 @@ def collect_multi_firm_inputs(anthropic_key: str | None, extraction_mode: str, a
     if pdf_uploads:
         for upload in pdf_uploads:
             name = upload.name.rsplit(".", 1)[0]
-            text = parse_pdf_text(upload)
+            text = parse_pdf_text(upload) if is_pdf(upload) else ""
             pdf_text_by_name[name] = text
-            extracted = extract_financials_from_document(upload, text, anthropic_key, extraction_mode)
+            extracted = extract_financials_from_document(upload, text, anthropic_key, openai_key, extraction_mode)
             if extracted["confidence"] > 0:
                 pdf_financials_by_name[name] = extracted
         st.success(f"Parsed {len(pdf_text_by_name)} PDF document(s) for DRHP red-flag scanning.")
@@ -335,6 +338,8 @@ def parse_pdf_text(uploaded_file) -> str:
 
 
 def extract_financials_from_pdf(uploaded_file) -> dict[str, Any]:
+    if not is_pdf(uploaded_file):
+        return empty_extraction("Heuristic autoscan supports PDFs only. Use OpenAI extraction for photos/images.")
     raw_rows = extract_pdf_table_rows(uploaded_file)
     extracted = extract_values_from_rows(raw_rows)
     financials = financials_from_extracted_values(extracted)
@@ -354,15 +359,30 @@ def extract_financials_from_pdf(uploaded_file) -> dict[str, Any]:
     }
 
 
-def extract_financials_from_document(uploaded_file, report_text: str, anthropic_key: str | None, extraction_mode: str) -> dict[str, Any]:
+def extract_financials_from_document(uploaded_file, report_text: str, anthropic_key: str | None, openai_key: str | None, extraction_mode: str) -> dict[str, Any]:
     heuristic = extract_financials_from_pdf(uploaded_file)
     if extraction_mode == "Heuristic autoscan":
         return heuristic
 
+    openai_result = extract_financials_with_openai(
+        uploaded_file.getvalue(),
+        uploaded_file.name,
+        uploaded_file.type or guess_mime_type(uploaded_file.name),
+        report_text,
+        openai_key,
+    )
+    if not openai_result.get("error"):
+        openai_extraction = extraction_from_ai_data(openai_result.get("data") or {}, "ChatGPT/OpenAI")
+        if extraction_mode == "AI agent autoscan":
+            return openai_extraction
+        if openai_extraction["matched_fields"] >= heuristic["matched_fields"]:
+            openai_extraction["note"] = f"Hybrid autoscan used ChatGPT/OpenAI extraction. {openai_extraction['note']}"
+            return openai_extraction
+
     ai_result = extract_financials_with_ai(report_text, anthropic_key)
     if ai_result.get("error"):
         if extraction_mode == "AI agent autoscan":
-            st.warning(f"AI extraction unavailable: {ai_result['error']}. Falling back to heuristic autoscan.")
+            st.warning(f"AI extraction unavailable. OpenAI: {openai_result.get('error')}; Claude: {ai_result['error']}. Falling back to heuristic autoscan.")
         return heuristic
 
     ai_data = ai_result.get("data") or {}
@@ -394,6 +414,46 @@ def extract_financials_from_document(uploaded_file, report_text: str, anthropic_
         }
     heuristic["note"] = f"Hybrid autoscan used heuristic extraction because it matched more fields. {heuristic['note']}"
     return heuristic
+
+
+def extraction_from_ai_data(ai_data: dict[str, Any], provider: str) -> dict[str, Any]:
+    financials = financials_from_ai_data(ai_data)
+    matched_fields = sum(1 for col in REQUIRED_COLUMNS if col != "year" and financials[col].abs().sum() > 0)
+    matched_years = int(financials["year"].nunique()) if not financials.empty else 0
+    confidence = float(ai_data.get("confidence") or min(1.0, matched_fields / 16))
+    note = (
+        f"{provider} extracted {matched_fields} fields across {matched_years} year(s). "
+        f"Model confidence: {confidence:.0%}. Unit: {ai_data.get('unit', 'not specified')}. "
+        f"Notes: {ai_data.get('notes', 'Review extracted values.')}"
+    )
+    return {
+        "financials": financials,
+        "matched_fields": matched_fields,
+        "matched_years": matched_years,
+        "confidence": confidence,
+        "note": note,
+    }
+
+
+def empty_extraction(note: str) -> dict[str, Any]:
+    return {"financials": ensure_columns(pd.DataFrame()), "matched_fields": 0, "matched_years": 0, "confidence": 0.0, "note": note}
+
+
+def is_pdf(uploaded_file) -> bool:
+    return (uploaded_file.type == "application/pdf") or uploaded_file.name.lower().endswith(".pdf")
+
+
+def guess_mime_type(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lower.endswith(".webp"):
+        return "image/webp"
+    return "application/octet-stream"
 
 
 def financials_from_ai_data(ai_data: dict[str, Any]) -> pd.DataFrame:
@@ -742,6 +802,8 @@ def render_dashboard(company: str, financials: pd.DataFrame, analysis: dict, ant
     st.subheader("Metric Cards")
     render_metric_cards(analysis)
 
+    render_extracted_data_calculations(financials, analysis)
+
     chart_cols = st.columns(2)
     with chart_cols[0]:
         st.plotly_chart(line_chart(financials, "revenue", "Revenue Trend"), use_container_width=True)
@@ -779,6 +841,76 @@ def render_dashboard(company: str, financials: pd.DataFrame, analysis: dict, ant
 
     pdf = build_pdf_report(company, analysis, financials, memo)
     st.download_button("Download PDF report", data=pdf, file_name=f"{company.lower().replace(' ', '_')}_sme_ipo_report.pdf", mime="application/pdf")
+
+
+def render_extracted_data_calculations(financials: pd.DataFrame, analysis: dict) -> None:
+    st.subheader("Extracted Data & Calculations")
+    with st.expander("Review source data and computed formula outputs", expanded=True):
+        st.markdown("**Extracted / entered financial data**")
+        st.dataframe(financials, use_container_width=True, hide_index=True)
+
+        st.markdown("**Calculated financial indicators**")
+        rows = []
+        for module_name, module in analysis["modules"].items():
+            for metric in module["metrics"].values():
+                rows.append({
+                    "Module": module_name,
+                    "Indicator": metric["name"],
+                    "Formula / Logic": formula_description(metric["name"]),
+                    "Latest Value": compact_metric_value(metric),
+                    "Score": metric["score"],
+                    "Status": metric["status"].upper(),
+                    "Warnings": "; ".join(metric.get("flags", [])),
+                })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def formula_description(name: str) -> str:
+    formulas = {
+        "Revenue Growth": "YoY growth and CAGR from revenue trend; handles negative prior-year base conservatively.",
+        "Gross Margin": "(Revenue - COGS) / Revenue x 100",
+        "EBITDA Margin": "EBITDA / Revenue x 100",
+        "PAT Margin": "Net Profit / Revenue x 100",
+        "ROCE": "EBIT / (Total Assets - Current Liabilities) x 100",
+        "Asset Turnover": "Revenue / Average Total Assets",
+        "Fixed Asset Turnover": "Revenue / Net Fixed Assets",
+        "ROA": "Net Profit / Average Total Assets x 100",
+        "Debtor Days": "Receivables / Revenue x 365",
+        "Inventory Days": "Inventory / COGS x 365",
+        "Creditor Days": "Payables / COGS x 365",
+        "Inventory Turnover": "COGS / Average Inventory",
+        "Cash Conversion Cycle": "DSO + DIO - DPO",
+        "Current Ratio": "Current Assets / Current Liabilities",
+        "Quick Ratio": "(Current Assets - Inventory) / Current Liabilities",
+        "Interest Coverage": "EBIT / Interest Expense",
+        "DSCR": "Operating Income / (Interest + Principal Repayments)",
+        "Cash Debt Coverage": "Operating Cash Flow / Total Debt",
+        "Net Debt-to-EBITDA": "(Total Debt - Cash) / EBITDA",
+        "Debt Ratio": "Total Debt / Total Assets",
+        "Long-Term Debt-to-Capitalization": "Long-Term Debt / (Long-Term Debt + Equity)",
+        "Goodwill as % of Assets": "Goodwill / Total Assets x 100",
+        "Operating Cash Flow": "Reported OCF trend; negative OCF is penalized.",
+        "Cash Conversion Ratio": "Operating Cash Flow / Net Profit",
+        "Free Cash Flow": "Operating Cash Flow - Capex; margin = FCF / Revenue x 100",
+        "Capex Intensity": "Capex / Operating Cash Flow",
+        "Financing Cash Flow - Debt Trend": "Repeated debt raised versus profit improvement",
+        "P/S Ratio": "Market Cap / Revenue",
+        "EV/EBITDA": "(Market Cap + Debt - Cash) / EBITDA",
+        "P/B Ratio": "Market Cap / Book Equity; cross-checked with ROE",
+        "NPV": "Sum of discounted cash flows - initial investment",
+        "IRR": "Discount rate that sets NPV to zero",
+        "Payback Period": "Time for undiscounted cash flows to recover investment",
+        "Discounted Payback Period": "Time for discounted cash flows to recover investment",
+        "Profitability Index": "PV of future cash flows / initial investment",
+        "Variance": "Probability-weighted squared deviation from expected cash flow",
+        "Standard Deviation": "Square root of variance",
+        "Coefficient of Variation": "Standard deviation / expected cash flow",
+        "Promoter Holding": "Post-IPO promoter holding threshold scoring",
+        "Grey Market Premium": "Manual GMP input, treated as sentiment not valuation proof",
+        "Use of IPO Proceeds": "Expansion/growth uses score better than debt-only uses",
+        "DRHP Red-Flag Scanner": "Keyword scan for audit, RPT, pledging, and revenue recognition risks",
+    }
+    return formulas.get(name, "Model threshold scoring based on latest value and trend.")
 
 
 def render_interpretation(company: str, financials: pd.DataFrame, analysis: dict) -> None:

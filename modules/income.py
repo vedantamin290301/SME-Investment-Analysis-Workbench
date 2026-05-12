@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .utils import average_pair, cagr, latest, module_summary, pct_change, result, safe_div, score_higher_better, score_lower_better, trend
+from .utils import average_pair, cagr, latest, module_summary, pct_change, ratio_series, result, safe_div, safe_financial_div, score_higher_better, score_lower_better, trend
 
 
 def revenue_growth(df: pd.DataFrame, benchmarks: dict) -> dict:
@@ -20,7 +20,7 @@ def revenue_growth(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def gross_margin(df: pd.DataFrame, benchmarks: dict) -> dict:
-    margins = ((df["revenue"] - df["cogs"]) / df["revenue"] * 100).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    margins = ratio_series(df["revenue"] - df["cogs"], df["revenue"], 100)
     benchmark = benchmarks.get("gross_margin", 35)
     score = score_higher_better(latest(margins), benchmark * 0.6, benchmark)
     if trend(margins) == "rising":
@@ -30,7 +30,7 @@ def gross_margin(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def ebitda_margin(df: pd.DataFrame, benchmarks: dict, sector: str) -> dict:
-    margins = (df["ebitda"] / df["revenue"] * 100).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    margins = ratio_series(df["ebitda"], df["revenue"], 100)
     benchmark = benchmarks.get("ebitda_margin", 12)
     score = score_higher_better(latest(margins), 0, benchmark)
     if trend(margins) == "rising":
@@ -47,7 +47,7 @@ def ebitda_margin(df: pd.DataFrame, benchmarks: dict, sector: str) -> dict:
 
 
 def pat_margin(df: pd.DataFrame, benchmarks: dict) -> dict:
-    margins = (df["net_profit"] / df["revenue"] * 100).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    margins = ratio_series(df["net_profit"], df["revenue"], 100)
     score = score_higher_better(latest(margins), -5, 12)
     if min(margins) < 0 and trend(margins) in {"rising", "improving"}:
         score += 15
@@ -56,19 +56,22 @@ def pat_margin(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def roce(df: pd.DataFrame, benchmarks: dict, cost_of_debt: float = 12) -> dict:
-    values = (df["ebit"] / (df["total_assets"] - df["current_liabilities"]) * 100).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    capital_employed = df["total_assets"] - df["current_liabilities"]
+    values = ratio_series(df["ebit"], capital_employed, 100)
     score = score_higher_better(latest(values), cost_of_debt, max(cost_of_debt + 10, 25))
     flags = []
     if latest(values) < cost_of_debt:
         flags.append("ROCE is below cost of debt, indicating value destruction.")
     if latest(values) < 10:
         flags.append("ROCE below 10% for a non-early-stage SME.")
+    if latest(capital_employed.tolist()) <= 0:
+        flags.append("Capital employed is zero or negative; ROCE is not economically meaningful.")
     return result("ROCE", score, {"Latest %": latest(values), "Trend": values, "Cost of Debt %": cost_of_debt}, flags)
 
 
 def asset_turnover(df: pd.DataFrame, benchmarks: dict) -> dict:
     assets = df["total_assets"].tolist()
-    values = [safe_div(df["revenue"].iloc[i], average_pair(assets, i)) for i in range(len(df))]
+    values = [safe_financial_div(df["revenue"].iloc[i], average_pair(assets, i)) for i in range(len(df))]
     benchmark = benchmarks.get("asset_turnover", 1.2)
     score = score_higher_better(latest(values), benchmark * 0.5, benchmark)
     flags = ["Asset turnover is below sector median."] if latest(values) < benchmark else []
@@ -76,7 +79,7 @@ def asset_turnover(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def fixed_asset_turnover(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["revenue"] / df["net_fixed_assets"]).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = ratio_series(df["revenue"], df["net_fixed_assets"])
     score = score_higher_better(latest(values), 0.5, benchmarks.get("fixed_asset_turnover", 3))
     if trend(values) == "rising":
         score += 15
@@ -86,14 +89,14 @@ def fixed_asset_turnover(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 def roa(df: pd.DataFrame, benchmarks: dict) -> dict:
     assets = df["total_assets"].tolist()
-    values = [safe_div(df["net_profit"].iloc[i], average_pair(assets, i)) * 100 for i in range(len(df))]
+    values = [safe_financial_div(df["net_profit"].iloc[i], average_pair(assets, i)) * 100 for i in range(len(df))]
     score = score_higher_better(latest(values), 5, 15)
     flags = ["ROA below 5%; capital-heavy warning."] if latest(values) < 5 else []
     return result("ROA", score, {"Latest %": latest(values), "Trend": values}, flags)
 
 
 def debtor_days(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["receivables"] / df["revenue"] * 365).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = ratio_series(df["receivables"], df["revenue"], 365)
     benchmark = benchmarks.get("dso", 75)
     score = score_lower_better(latest(values), benchmark, 120)
     flags = ["DSO above 90 days; cash crunch risk."] if latest(values) > 90 else []
@@ -101,7 +104,7 @@ def debtor_days(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def inventory_days(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["inventory"] / df["cogs"] * 365).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = ratio_series(df["inventory"], df["cogs"], 365)
     benchmark = benchmarks.get("dio", 90)
     score = score_lower_better(latest(values), benchmark, benchmark * 1.8)
     flags = ["DIO rising 3 years in a row; unsold stock warning."] if trend(values) == "rising" else []
@@ -109,7 +112,7 @@ def inventory_days(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def creditor_days(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["payables"] / df["cogs"] * 365).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = ratio_series(df["payables"], df["cogs"], 365)
     benchmark = benchmarks.get("dpo", 60)
     score = 90 if benchmark <= latest(values) <= benchmark * 1.6 else score_lower_better(abs(latest(values) - benchmark), 0, benchmark)
     flags = ["Extremely high DPO may signal inability to pay suppliers on time."] if latest(values) > benchmark * 2 else []
@@ -118,17 +121,17 @@ def creditor_days(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 def inventory_turnover(df: pd.DataFrame, benchmarks: dict) -> dict:
     inventory = df["inventory"].tolist()
-    values = [safe_div(df["cogs"].iloc[i], average_pair(inventory, i)) for i in range(len(df))]
+    values = [safe_financial_div(df["cogs"].iloc[i], average_pair(inventory, i)) for i in range(len(df))]
     benchmark = benchmarks.get("inventory_turnover", 5)
     score = score_higher_better(latest(values), benchmark * 0.5, benchmark)
     return result("Inventory Turnover", score, {"Latest x": latest(values), "Trend": values, "Sector Peer x": benchmark})
 
 
 def cash_conversion_cycle(df: pd.DataFrame, benchmarks: dict) -> dict:
-    dso = (df["receivables"] / df["revenue"] * 365).replace([np.inf, -np.inf], 0).fillna(0)
-    dio = (df["inventory"] / df["cogs"] * 365).replace([np.inf, -np.inf], 0).fillna(0)
-    dpo = (df["payables"] / df["cogs"] * 365).replace([np.inf, -np.inf], 0).fillna(0)
-    values = (dso + dio - dpo).tolist()
+    dso = ratio_series(df["receivables"], df["revenue"], 365)
+    dio = ratio_series(df["inventory"], df["cogs"], 365)
+    dpo = ratio_series(df["payables"], df["cogs"], 365)
+    values = [a + b - c for a, b, c in zip(dso, dio, dpo)]
     score = 100 if latest(values) < 0 else score_lower_better(latest(values), benchmarks.get("ccc", 60), 180)
     flags = ["CCC worsening year over year."] if trend(values) == "rising" else []
     return result("Cash Conversion Cycle", score, {"Latest Days": latest(values), "Trend": values}, flags)
@@ -153,4 +156,3 @@ def analyze_income_and_working_capital(df: pd.DataFrame, benchmarks: dict, secto
         "cash_conversion_cycle": cash_conversion_cycle(df, benchmarks),
     }
     return module_summary(income), module_summary(working_capital)
-

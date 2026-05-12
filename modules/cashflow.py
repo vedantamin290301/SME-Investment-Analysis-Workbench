@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .utils import latest, module_summary, result, safe_div, score_higher_better, score_lower_better, trend
+from .utils import latest, module_summary, ratio_series, result, score_higher_better, score_lower_better, trend
 
 
 def operating_cash_flow(df: pd.DataFrame, benchmarks: dict) -> dict:
@@ -18,20 +18,25 @@ def operating_cash_flow(df: pd.DataFrame, benchmarks: dict) -> dict:
 
 
 def cash_conversion_ratio(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["operating_cash_flow"] / df["net_profit"]).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = ratio_series(df["operating_cash_flow"], df["net_profit"], allow_negative_denominator=True)
     flags = ["Cash conversion ratio below 0.5; profit quality concern."] if latest(values) < 0.5 else []
     return result("Cash Conversion Ratio", score_higher_better(latest(values), 0.5, 1), {"Latest x": latest(values), "Trend": values}, flags)
 
 
 def free_cash_flow(df: pd.DataFrame, benchmarks: dict) -> dict:
     values = (df["operating_cash_flow"] - df["capex"]).tolist()
-    margin = (df["operating_cash_flow"] - df["capex"]) / df["revenue"] * 100
+    margin = ratio_series(df["operating_cash_flow"] - df["capex"], df["revenue"], 100)
     flags = ["FCF is negative in recent years; business may be cash-burning."] if sum(v < 0 for v in values[-2:]) >= 2 else []
-    return result("Free Cash Flow", score_higher_better(latest(values), 0, max(latest(df["operating_cash_flow"].tolist()), 1)), {"Latest": latest(values), "FCF Margin %": latest(margin.tolist()), "Trend": values}, flags)
+    return result("Free Cash Flow", score_higher_better(latest(values), 0, max(latest(df["operating_cash_flow"].tolist()), 1)), {"Latest": latest(values), "FCF Margin %": latest(margin), "Trend": values}, flags)
 
 
 def capex_intensity(df: pd.DataFrame, benchmarks: dict) -> dict:
-    values = (df["capex"] / df["operating_cash_flow"]).replace([np.inf, -np.inf], 0).fillna(0).tolist()
+    values = []
+    for capex, ocf in zip(df["capex"].tolist(), df["operating_cash_flow"].tolist()):
+        if ocf <= 0 and capex > 0:
+            values.append(999.0)
+        else:
+            values.extend(ratio_series([capex], [ocf]))
     flags = ["Capex consistently exceeds OCF; likely funded by debt or equity issuance."] if all(v > 1 for v in values[-2:]) else []
     return result("Capex Intensity", score_lower_better(latest(values), 0.5, 1.2), {"Latest x": latest(values), "Trend": values}, flags)
 
@@ -55,4 +60,3 @@ def analyze_cash_flow(df: pd.DataFrame, benchmarks: dict) -> dict:
         "financing_debt_trend": financing_debt_trend(df, benchmarks),
     }
     return module_summary(metrics)
-

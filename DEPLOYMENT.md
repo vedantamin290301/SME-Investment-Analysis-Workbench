@@ -27,6 +27,7 @@ app.py
 
 ```toml
 ANTHROPIC_API_KEY = "your_key_here"
+OPENAI_API_KEY = "your_openai_key_here"
 ```
 
 9. Deploy.
@@ -36,4 +37,3 @@ ANTHROPIC_API_KEY = "your_key_here"
 - Do not upload `.streamlit/secrets.toml`, `.env`, `__pycache__`, or `*.pyc`.
 - The Windows `.bat` launchers are for local use only and are ignored by Git.
 - If PDF extraction or AI extraction fails in cloud, check that `pdfplumber`, `reportlab`, and `anthropic` installed successfully from `requirements.txt`.
-

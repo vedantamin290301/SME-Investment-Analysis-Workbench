@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .utils import module_summary, result, safe_div, score_higher_better, score_lower_better
+from .utils import module_summary, result, safe_div, safe_financial_div, score_higher_better, score_lower_better
 
 
 def npv(initial_investment: float, cash_flows: list[float], discount_rate: float) -> dict:
@@ -20,10 +20,14 @@ def irr(initial_investment: float, cash_flows: list[float], target_irr: float) -
         value = float(npf.irr(flows) * 100)
     except Exception:
         value = _irr_bisection(flows) * 100
+    if not np.isfinite(value):
+        value = -100.0
     score = score_higher_better(value, 15, 30)
     if value >= 40:
         score = 100
     flags = ["IRR below fund target."] if value < target_irr else []
+    if sum(cf > 0 for cf in cash_flows) == 0:
+        flags.append("Projected cash flows never turn positive; IRR is not investable.")
     return result("IRR", score, {"IRR %": value, "Target IRR %": target_irr}, flags)
 
 
@@ -44,7 +48,7 @@ def payback_period(initial_investment: float, cash_flows: list[float]) -> dict:
     period = float("inf")
     for idx, cf in enumerate(cash_flows, start=1):
         if recovered + cf >= initial_investment:
-            period = idx - 1 + safe_div(initial_investment - recovered, cf)
+            period = idx - 1 + safe_financial_div(initial_investment - recovered, cf)
             break
         recovered += cf
     score = score_lower_better(period, 2, 5) if period != float("inf") else 10
@@ -58,7 +62,7 @@ def discounted_payback_period(initial_investment: float, cash_flows: list[float]
     period = float("inf")
     for idx, cf in enumerate(discounted, start=1):
         if recovered + cf >= initial_investment:
-            period = idx - 1 + safe_div(initial_investment - recovered, cf)
+            period = idx - 1 + safe_financial_div(initial_investment - recovered, cf)
             break
         recovered += cf
     score = score_lower_better(period, 3, 6) if period != float("inf") else 10
@@ -68,7 +72,7 @@ def discounted_payback_period(initial_investment: float, cash_flows: list[float]
 def profitability_index(initial_investment: float, cash_flows: list[float], discount_rate: float) -> dict:
     rate = discount_rate / 100
     pv = sum(cf / ((1 + rate) ** (idx + 1)) for idx, cf in enumerate(cash_flows))
-    value = safe_div(pv, initial_investment)
+    value = safe_financial_div(pv, initial_investment)
     score = score_higher_better(value, 1, 1.5)
     return result("Profitability Index", score, {"PI": value})
 
@@ -82,4 +86,3 @@ def analyze_capital_budget(initial_investment: float, cash_flows: list[float], d
         "profitability_index": profitability_index(initial_investment, cash_flows, discount_rate),
     }
     return module_summary(metrics)
-

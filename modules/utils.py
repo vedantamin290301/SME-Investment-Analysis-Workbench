@@ -20,6 +20,26 @@ def safe_div(numerator: float, denominator: float, default: float = 0.0) -> floa
         return default
 
 
+def safe_financial_div(numerator: float, denominator: float, default: float = 0.0, allow_negative_denominator: bool = False) -> float:
+    """Division helper for finance ratios where zero/negative bases need explicit handling."""
+    try:
+        if denominator in (0, None) or pd.isna(denominator):
+            return default
+        if denominator < 0 and not allow_negative_denominator:
+            return default
+        value = numerator / denominator
+        return float(value) if isfinite(value) else default
+    except Exception:
+        return default
+
+
+def ratio_series(numerators: Iterable[float], denominators: Iterable[float], multiplier: float = 1.0, allow_negative_denominator: bool = False) -> list[float]:
+    return [
+        safe_financial_div(float(num), float(den), allow_negative_denominator=allow_negative_denominator) * multiplier
+        for num, den in zip(list(numerators), list(denominators))
+    ]
+
+
 def latest(series: Iterable[float]) -> float:
     values = list(series)
     return float(values[-1]) if values else 0.0
@@ -32,14 +52,21 @@ def average_pair(values: list[float], idx: int) -> float:
 
 
 def pct_change(current: float, previous: float) -> float:
+    if previous == 0 or pd.isna(previous):
+        return 0.0
+    if previous < 0 and current >= 0:
+        return 100.0
+    if previous < 0 and current < 0:
+        return -safe_div(abs(current) - abs(previous), abs(previous)) * 100
     return safe_div(current - previous, previous) * 100
 
 
 def cagr(values: list[float]) -> float:
-    if len(values) < 2 or values[0] <= 0:
+    clean = [float(v) for v in values if not pd.isna(v)]
+    if len(clean) < 2 or clean[0] <= 0 or clean[-1] <= 0:
         return 0.0
-    years = len(values) - 1
-    return ((values[-1] / values[0]) ** (1 / years) - 1) * 100
+    years = len(clean) - 1
+    return ((clean[-1] / clean[0]) ** (1 / years) - 1) * 100
 
 
 def trend(values: list[float]) -> str:
@@ -98,4 +125,3 @@ def module_summary(results: dict[str, dict]) -> dict:
 
 def numeric_columns(df: pd.DataFrame) -> list[str]:
     return [col for col in df.columns if col != "Metric"]
-

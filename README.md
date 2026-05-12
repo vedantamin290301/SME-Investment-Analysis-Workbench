@@ -6,7 +6,7 @@ Python + Streamlit workbench for professional pre-IPO and SME IPO screening.
 
 - Manual single-year or multi-year restated financial input with editable Streamlit table
 - CSV upload for structured financials
-- PDF upload and DRHP red-flag scanning with `pdfplumber`
+- PDF/photo upload, DRHP red-flag scanning, and AI-assisted financial extraction
 - Public ticker context through `yfinance`
 - Sidebar fund parameters: target IRR, horizon, sector, discount rate, max D/E, ROCE floor
 - Separate sidebar controls for single vs multi-company analysis and single-year vs multi-year analysis
@@ -15,6 +15,7 @@ Python + Streamlit workbench for professional pre-IPO and SME IPO screening.
 - Weighted INVEST / WATCH / AVOID investment score
 - Plotly gauge, radar chart, metric cards, trend charts, red flag log, peer comparison scaffold
 - Claude investment memo integration with deterministic fallback when no API key is supplied
+- OpenAI/ChatGPT document and image extraction for financial reports and statement photos
 - ReportLab PDF export with ratio table, charts, and memo
 
 ## Run
@@ -60,12 +61,14 @@ PDF autoscan is heuristic because DRHP and annual-report table formats vary. Alw
 
 ## AI Agent Extraction
 
-The sidebar has a **PDF extraction mode** selector:
+The sidebar has a **Document/photo extraction mode** selector:
 
 - `Heuristic autoscan`: uses local table parsing only
 - `AI agent autoscan`: sends parsed report text to Claude and asks it to fill the scoring schema
 - `Hybrid autoscan`: uses AI when it extracts at least as many fields as the heuristic parser
 
 To use AI extraction, paste a Claude/Anthropic API key into the sidebar field. If no key is supplied, the app falls back to local heuristic extraction.
+
+For ChatGPT/OpenAI extraction from PDFs and photos, paste an OpenAI API key into the sidebar. The app accepts PDF, PNG, JPG, JPEG, and WEBP uploads.
 
 Always review the extracted table before scoring. Financial reports may use different units, consolidated/standalone sections, or repeated tables.
