@@ -1,0 +1,63 @@
+{
+  "Manufacturing": {
+    "gross_margin": 35,
+    "ebitda_margin": 14,
+    "asset_turnover": 1.4,
+    "fixed_asset_turnover": 3.0,
+    "dso": 75,
+    "dio": 90,
+    "dpo": 75,
+    "inventory_turnover": 4.0,
+    "ccc": 90,
+    "ps": 2.0,
+    "ev_ebitda": 12,
+    "pb": 3.0,
+    "roe": 16
+  },
+  "Trading": {
+    "gross_margin": 18,
+    "ebitda_margin": 6,
+    "asset_turnover": 3.0,
+    "fixed_asset_turnover": 8.0,
+    "dso": 60,
+    "dio": 45,
+    "dpo": 60,
+    "inventory_turnover": 8.0,
+    "ccc": 45,
+    "ps": 1.0,
+    "ev_ebitda": 10,
+    "pb": 2.5,
+    "roe": 15
+  },
+  "Services": {
+    "gross_margin": 55,
+    "ebitda_margin": 18,
+    "asset_turnover": 1.2,
+    "fixed_asset_turnover": 6.0,
+    "dso": 70,
+    "dio": 10,
+    "dpo": 45,
+    "inventory_turnover": 20.0,
+    "ccc": 35,
+    "ps": 3.0,
+    "ev_ebitda": 15,
+    "pb": 4.0,
+    "roe": 18
+  },
+  "Technology": {
+    "gross_margin": 65,
+    "ebitda_margin": 22,
+    "asset_turnover": 1.0,
+    "fixed_asset_turnover": 10.0,
+    "dso": 75,
+    "dio": 5,
+    "dpo": 45,
+    "inventory_turnover": 25.0,
+    "ccc": 35,
+    "ps": 5.0,
+    "ev_ebitda": 20,
+    "pb": 6.0,
+    "roe": 20
+  }
+}
+
