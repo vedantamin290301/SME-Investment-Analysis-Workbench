@@ -41,6 +41,8 @@ FIELD_SCHEMA = {
         }
     ],
     "confidence": 0.0,
+    "missing_fields": ["field names that were not found"],
+    "field_sources": {"revenue": "short source line or table name"},
     "notes": "Assumptions, missing fields, negative values, units, and source quality",
 }
 
@@ -90,26 +92,43 @@ def extract_financials_with_openai(
 def extraction_prompt(report_text: str) -> str:
     clipped = report_text[:60000]
     return f"""
-You are a financial data extraction agent for an SME investment analysis app.
+You are a strict financial statement extraction agent for an SME investment analysis app.
 
-Extract the latest available single-year or 3-year financial statement data from the supplied document or image.
+Extract ONLY the financial fields required by the app from the supplied document or image.
+The app needs these exact fields:
+revenue, cogs, ebitda, ebit, net_profit, total_assets, current_assets, current_liabilities,
+net_fixed_assets, receivables, inventory, payables, interest_expense, principal_repayments,
+operating_income, operating_cash_flow, total_debt, long_term_debt, cash, equity, goodwill,
+capex, debt_raised.
 
 Return only valid JSON using this exact schema:
 {json.dumps(FIELD_SCHEMA, indent=2)}
 
 Rules:
+- First identify the company/issuer and the reporting unit.
+- Prefer audited/restated/consolidated financial statements. If only standalone data is available, use it and say so in notes.
+- Extract from P&L, balance sheet, cash flow statement, notes to borrowings, and fixed-asset/capex notes.
+- Do not use narrative percentages or ratio tables as source values.
 - Use numeric values only. Preserve negative values when the source reports losses, negative cash flow, repayments, or outflows.
 - Use financial year end as the year. FY 2024-25 should be 2025.
 - Map revenue from operations / sales / total operating income to revenue.
-- Map cost of materials, purchases, cost of goods sold, or cost of sales to cogs when available.
+- Map cost of materials consumed + purchases + changes in inventory / cost of goods sold / cost of sales to cogs when available.
+- If EBITDA is not directly reported, calculate EBITDA = EBIT + depreciation + amortisation when those values are available. Otherwise use 0 and list it missing.
+- If EBIT is not directly reported, calculate EBIT = profit before tax + finance cost when possible.
 - Map PAT / profit after tax / profit for the year to net_profit.
 - Map finance cost to interest_expense if interest is not separated.
 - Map borrowings / debt to total_debt; non-current borrowings to long_term_debt.
+- Map trade receivables to receivables, inventories to inventory, trade payables to payables.
+- Map total equity / net worth / shareholders' funds to equity.
+- Map cash and cash equivalents plus bank balances to cash when appropriate.
 - Map cash flow from operating activities to operating_cash_flow.
 - Map purchase of PPE/fixed assets to capex as a positive capex number.
+- Map proceeds from borrowings to debt_raised. Principal repayment should be positive when it represents repayment amount.
 - If a field is missing, use 0 and explain in notes.
 - If units differ across tables, normalize to one unit and state it in unit/notes.
-- Prefer consolidated financials if both consolidated and standalone are shown; mention that choice in notes.
+- For every field you fill, add a short source clue in field_sources, e.g. "P&L: Revenue from operations".
+- Put every unavailable field in missing_fields.
+- Return up to the latest 3 years if present. If only one year is visible, return one row.
 
 Locally extracted text, if any:
 {clipped}

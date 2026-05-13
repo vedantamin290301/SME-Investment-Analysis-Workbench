@@ -6,7 +6,7 @@ Python + Streamlit workbench for professional pre-IPO and SME IPO screening.
 
 - Manual single-year or multi-year restated financial input with editable Streamlit table
 - CSV upload for structured financials
-- PDF/photo upload, DRHP red-flag scanning, and AI-assisted financial extraction
+- Multi-file PDF/photo upload, DRHP red-flag scanning, and AI-assisted financial extraction
 - Public ticker context through `yfinance`
 - Sidebar fund parameters: target IRR, horizon, sector, discount rate, max D/E, ROCE floor
 - Separate sidebar controls for single vs multi-company analysis and single-year vs multi-year analysis
@@ -16,6 +16,7 @@ Python + Streamlit workbench for professional pre-IPO and SME IPO screening.
 - Plotly gauge, radar chart, metric cards, trend charts, red flag log, peer comparison scaffold
 - Claude investment memo integration with deterministic fallback when no API key is supplied
 - OpenAI/ChatGPT document and image extraction for financial reports and statement photos
+- Financial Extraction Review section showing uploaded files, missing fields, source clues, extracted rows, formulas, scores, and warnings
 - ReportLab PDF export with ratio table, charts, and memo
 
 ## Run
@@ -61,7 +62,7 @@ PDF autoscan is heuristic because DRHP and annual-report table formats vary. Alw
 
 ## AI Agent Extraction
 
-The sidebar has a **Document/photo extraction mode** selector:
+The sidebar has a **Financial document extraction** selector:
 
 - `Heuristic autoscan`: uses local table parsing only
 - `AI agent autoscan`: sends parsed report text to Claude and asks it to fill the scoring schema
@@ -69,6 +70,6 @@ The sidebar has a **Document/photo extraction mode** selector:
 
 To use AI extraction, paste a Claude/Anthropic API key into the sidebar field. If no key is supplied, the app falls back to local heuristic extraction.
 
-For ChatGPT/OpenAI extraction from PDFs and photos, paste an OpenAI API key into the sidebar. The app accepts PDF, PNG, JPG, JPEG, and WEBP uploads.
+For ChatGPT/OpenAI extraction from PDFs and photos, paste an OpenAI API key into the sidebar. The app accepts PDF, PNG, JPG, JPEG, and WEBP uploads. You can upload multiple files at once; for single-company mode the app merges them into one company, and for multi-company mode it groups files by company-like filename prefix.
 
 Always review the extracted table before scoring. Financial reports may use different units, consolidated/standalone sections, or repeated tables.

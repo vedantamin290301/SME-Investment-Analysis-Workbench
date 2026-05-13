@@ -107,7 +107,7 @@ def main() -> None:
             input_method = st.radio("Input source", ["Manual / sample portfolio", "CSV/PDF upload"])
         anthropic_key = st.text_input("Claude API key", type="password", help="Optional. If blank, the app shows a deterministic memo.")
         openai_key = st.text_input("OpenAI API key", type="password", help="Optional. Used for ChatGPT document/photo extraction.")
-        extraction_mode = st.selectbox("Document/photo extraction mode", ["Heuristic autoscan", "AI agent autoscan", "Hybrid autoscan"], index=2)
+        extraction_mode = st.selectbox("Financial document extraction", ["Heuristic autoscan", "AI agent autoscan", "Hybrid autoscan"], index=2)
 
     st.title("SME Investment Analysis Workbench")
     st.caption("For professional pre-IPO and SME IPO screening across growth, margins, working capital, leverage, cash flow, valuation, capital budgeting, risk, and IPO-specific red flags.")
@@ -175,6 +175,7 @@ def main() -> None:
         selected["analysis"],
         anthropic_key,
         portfolio_df=portfolio_df,
+        extraction_context=source_firm,
     )
 
 
@@ -199,23 +200,29 @@ def collect_inputs(
             return firms_from_csv(pd.read_csv(upload), upload.name.rsplit(".", 1)[0], analysis_years)
         st.info("Upload a CSV with the required financial columns. Sample data is loaded until then.")
     elif input_method == "PDF upload":
-        upload = st.file_uploader("Upload DRHP, financial statement PDF, or financial photo", type=["pdf", "png", "jpg", "jpeg", "webp"])
-        if upload:
-            drhp_text = parse_pdf_text(upload) if is_pdf(upload) else ""
-            extracted = extract_financials_from_document(upload, drhp_text, anthropic_key, openai_key, extraction_mode)
-            st.success(f"Parsed {len(drhp_text):,} characters from PDF for red-flag scanning.")
-            st.text_area("Parsed PDF text preview", drhp_text[:4000], height=160)
-            if extracted["confidence"] > 0:
-                st.info(f"Autoscan extracted {extracted['matched_fields']} financial fields across {extracted['matched_years']} year(s). Review the table before relying on the score.")
-                st.dataframe(extracted["financials"], use_container_width=True, hide_index=True)
-                return [{
-                    "company": upload.name.rsplit(".", 1)[0],
-                    "financials": ensure_columns(extracted["financials"], analysis_years),
-                    "drhp_text": drhp_text,
-                    "extraction_note": extracted["note"],
-                }]
-        st.info("PDF extraction is used for red-flag scanning and financial autoscan. If tables are not machine-readable, sample rows are loaded for manual editing.")
-        return [{"company": "PDF Uploaded Firm", "financials": ensure_columns(sample_financials(), analysis_years), "drhp_text": drhp_text}]
+        uploads = st.file_uploader(
+            "Upload financial reports, DRHPs, statements, or photos",
+            type=["pdf", "png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            help="Upload multiple files for the same company. The app merges extracted fields across files.",
+        )
+        company_name = st.text_input("Company name for uploaded documents", value="Uploaded Company")
+        if uploads:
+            extracted = extract_from_multiple_uploads(uploads, anthropic_key, openai_key, extraction_mode, analysis_years)
+            st.success(f"Processed {len(uploads)} file(s).")
+            st.info(extracted["note"])
+            st.dataframe(extracted["financials"], use_container_width=True, hide_index=True)
+            return [{
+                "company": company_name.strip() or uploads[0].name.rsplit(".", 1)[0],
+                "financials": ensure_columns(extracted["financials"], analysis_years),
+                "drhp_text": extracted["drhp_text"],
+                "extraction_note": extracted["note"],
+                "extraction_sources": extracted.get("sources", {}),
+                "missing_fields": extracted.get("missing_fields", []),
+                "uploaded_files": [upload.name for upload in uploads],
+            }]
+        st.info("Upload one or more PDFs/photos. The app will extract and merge the required financial fields.")
+        return [{"company": "Uploaded Company", "financials": ensure_columns(sample_financials(), analysis_years), "drhp_text": drhp_text}]
     elif input_method == "Ticker lookup":
         ticker = st.text_input("NSE/BSE ticker", value="RELIANCE.NS")
         if st.button("Fetch public-market context"):
@@ -227,14 +234,14 @@ def collect_inputs(
 
 
 def collect_multi_firm_inputs(anthropic_key: str | None, openai_key: str | None, extraction_mode: str, analysis_years: int) -> list[dict[str, Any]]:
-    st.markdown("Upload multiple firm documents. CSV files provide financial rows; PDF files add DRHP text and optional financial autoscan.")
+    st.markdown("Upload multiple firm documents/photos. CSV files provide financial rows; PDFs/photos are grouped by company name and merged.")
     csv_uploads = st.file_uploader(
         "Upload one combined CSV or multiple firm CSVs",
         type=["csv"],
         accept_multiple_files=True,
         help="A combined CSV can include a company/firm column. Separate CSV files use the file name as the firm name.",
     )
-    pdf_uploads = st.file_uploader("Upload DRHP / financial statement PDFs or financial photos", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
+    pdf_uploads = st.file_uploader("Upload financial documents/photos", type=["pdf", "png", "jpg", "jpeg", "webp"], accept_multiple_files=True)
 
     firms: list[dict[str, Any]] = []
     if csv_uploads:
@@ -244,14 +251,14 @@ def collect_multi_firm_inputs(anthropic_key: str | None, openai_key: str | None,
     pdf_text_by_name = {}
     pdf_financials_by_name = {}
     if pdf_uploads:
-        for upload in pdf_uploads:
-            name = upload.name.rsplit(".", 1)[0]
-            text = parse_pdf_text(upload) if is_pdf(upload) else ""
+        grouped_uploads = group_uploads_by_company(pdf_uploads)
+        for name, uploads in grouped_uploads.items():
+            extracted = extract_from_multiple_uploads(uploads, anthropic_key, openai_key, extraction_mode, analysis_years)
+            text = extracted["drhp_text"]
             pdf_text_by_name[name] = text
-            extracted = extract_financials_from_document(upload, text, anthropic_key, openai_key, extraction_mode)
             if extracted["confidence"] > 0:
                 pdf_financials_by_name[name] = extracted
-        st.success(f"Parsed {len(pdf_text_by_name)} PDF document(s) for DRHP red-flag scanning.")
+        st.success(f"Processed {len(pdf_uploads)} file(s) across {len(grouped_uploads)} company group(s).")
         if pdf_financials_by_name:
             st.info(f"Autoscan extracted financial tables from {len(pdf_financials_by_name)} PDF document(s).")
 
@@ -265,6 +272,8 @@ def collect_multi_firm_inputs(anthropic_key: str | None, openai_key: str | None,
                 "financials": ensure_columns(financials, analysis_years),
                 "drhp_text": text,
                 "extraction_note": extracted["note"] if extracted else "No machine-readable financial table was detected; sample rows loaded.",
+                "extraction_sources": extracted.get("sources", {}) if extracted else {},
+                "missing_fields": extracted.get("missing_fields", []) if extracted else REQUIRED_COLUMNS[1:],
             })
         if any(name not in pdf_financials_by_name for name in pdf_text_by_name):
             st.info("Some PDFs did not expose machine-readable financial tables. Edit those generated financial rows in the firm detail table.")
@@ -312,6 +321,9 @@ def dedupe_firms(firms: list[dict[str, Any]], analysis_years: int = 3) -> list[d
             "financials": ensure_columns(firm["financials"], analysis_years),
             "drhp_text": firm.get("drhp_text", ""),
             "extraction_note": firm.get("extraction_note", ""),
+            "extraction_sources": firm.get("extraction_sources", {}),
+            "missing_fields": firm.get("missing_fields", []),
+            "uploaded_files": firm.get("uploaded_files", []),
         })
     return output
 
@@ -337,6 +349,91 @@ def parse_pdf_text(uploaded_file) -> str:
         return ""
 
 
+def group_uploads_by_company(uploads) -> dict[str, list[Any]]:
+    grouped: dict[str, list[Any]] = {}
+    for upload in uploads:
+        name = upload.name.rsplit(".", 1)[0]
+        company = re.split(r"[_-](?:pnl|profit|balance|cash|cf|bs|fy|statement|report|drhp)", name, flags=re.I)[0].strip(" _-")
+        company = company or name
+        grouped.setdefault(company, []).append(upload)
+    return grouped
+
+
+def extract_from_multiple_uploads(uploads, anthropic_key: str | None, openai_key: str | None, extraction_mode: str, analysis_years: int) -> dict[str, Any]:
+    extractions = []
+    drhp_texts = []
+    notes = []
+    sources: dict[str, str] = {}
+    for upload in uploads:
+        text = parse_pdf_text(upload) if is_pdf(upload) else ""
+        drhp_texts.append(text)
+        extracted = extract_financials_from_document(upload, text, anthropic_key, openai_key, extraction_mode)
+        extracted["file_name"] = upload.name
+        extractions.append(extracted)
+        notes.append(f"{upload.name}: {extracted.get('note', '')}")
+        for field, source in extracted.get("sources", {}).items():
+            sources.setdefault(field, f"{upload.name}: {source}")
+
+    merged = merge_extractions(extractions, analysis_years)
+    missing = missing_required_fields(merged)
+    confidence = max([item.get("confidence", 0.0) for item in extractions] + [0.0])
+    matched_fields = len(REQUIRED_COLUMNS) - 1 - len(missing)
+    note = (
+        f"Merged {len(uploads)} uploaded file(s). Extracted {matched_fields}/{len(REQUIRED_COLUMNS) - 1} required fields. "
+        f"Missing fields: {', '.join(missing) if missing else 'none'}. "
+        "Review the extraction table before relying on the score."
+    )
+    return {
+        "financials": merged,
+        "matched_fields": matched_fields,
+        "matched_years": int(merged["year"].nunique()) if not merged.empty else 0,
+        "confidence": confidence,
+        "note": note,
+        "drhp_text": "\n".join(text for text in drhp_texts if text),
+        "sources": sources,
+        "missing_fields": missing,
+        "file_notes": notes,
+    }
+
+
+def merge_extractions(extractions: list[dict[str, Any]], analysis_years: int) -> pd.DataFrame:
+    years = sorted({
+        int(year)
+        for extraction in extractions
+        for year in extraction.get("financials", pd.DataFrame()).get("year", pd.Series(dtype=float)).tolist()
+        if year
+    })
+    if not years:
+        years = [2025]
+    years = years[-analysis_years:]
+    rows = []
+    for year in years:
+        row = {"year": year}
+        for field in REQUIRED_COLUMNS[1:]:
+            value = 0.0
+            for extraction in extractions:
+                df = extraction.get("financials", pd.DataFrame())
+                if df.empty or field not in df.columns or "year" not in df.columns:
+                    continue
+                match = df[df["year"] == year]
+                if not match.empty:
+                    candidate = float(match[field].iloc[-1])
+                    if candidate != 0:
+                        value = candidate
+                        break
+            row[field] = value
+        rows.append(row)
+    return ensure_columns(pd.DataFrame(rows), analysis_years)
+
+
+def missing_required_fields(financials: pd.DataFrame) -> list[str]:
+    missing = []
+    for field in REQUIRED_COLUMNS[1:]:
+        if field not in financials.columns or financials[field].abs().sum() == 0:
+            missing.append(field)
+    return missing
+
+
 def extract_financials_from_pdf(uploaded_file) -> dict[str, Any]:
     if not is_pdf(uploaded_file):
         return empty_extraction("Heuristic autoscan supports PDFs only. Use OpenAI extraction for photos/images.")
@@ -356,6 +453,8 @@ def extract_financials_from_pdf(uploaded_file) -> dict[str, Any]:
         "matched_years": matched_years,
         "confidence": confidence,
         "note": note,
+        "sources": {},
+        "missing_fields": missing_required_fields(financials),
     }
 
 
@@ -402,6 +501,8 @@ def extract_financials_from_document(uploaded_file, report_text: str, anthropic_
             "matched_years": matched_years,
             "confidence": ai_confidence or min(1.0, matched_fields / 16),
             "note": ai_note,
+            "sources": ai_data.get("field_sources", {}) or {},
+            "missing_fields": ai_data.get("missing_fields", missing_required_fields(ai_financials)) or [],
         }
 
     if matched_fields >= heuristic["matched_fields"]:
@@ -411,6 +512,8 @@ def extract_financials_from_document(uploaded_file, report_text: str, anthropic_
             "matched_years": matched_years,
             "confidence": ai_confidence or min(1.0, matched_fields / 16),
             "note": f"Hybrid autoscan used AI extraction. {ai_note}",
+            "sources": ai_data.get("field_sources", {}) or {},
+            "missing_fields": ai_data.get("missing_fields", missing_required_fields(ai_financials)) or [],
         }
     heuristic["note"] = f"Hybrid autoscan used heuristic extraction because it matched more fields. {heuristic['note']}"
     return heuristic
@@ -432,11 +535,21 @@ def extraction_from_ai_data(ai_data: dict[str, Any], provider: str) -> dict[str,
         "matched_years": matched_years,
         "confidence": confidence,
         "note": note,
+        "sources": ai_data.get("field_sources", {}) or {},
+        "missing_fields": ai_data.get("missing_fields", missing_required_fields(financials)) or [],
     }
 
 
 def empty_extraction(note: str) -> dict[str, Any]:
-    return {"financials": ensure_columns(pd.DataFrame()), "matched_fields": 0, "matched_years": 0, "confidence": 0.0, "note": note}
+    return {
+        "financials": ensure_columns(pd.DataFrame()),
+        "matched_fields": 0,
+        "matched_years": 0,
+        "confidence": 0.0,
+        "note": note,
+        "sources": {},
+        "missing_fields": REQUIRED_COLUMNS[1:],
+    }
 
 
 def is_pdf(uploaded_file) -> bool:
@@ -789,7 +902,14 @@ def run_analysis(**kwargs) -> dict:
     return {"modules": modules, "overall": score_investment(modules)}
 
 
-def render_dashboard(company: str, financials: pd.DataFrame, analysis: dict, anthropic_key: str | None, portfolio_df: pd.DataFrame | None = None) -> None:
+def render_dashboard(
+    company: str,
+    financials: pd.DataFrame,
+    analysis: dict,
+    anthropic_key: str | None,
+    portfolio_df: pd.DataFrame | None = None,
+    extraction_context: dict[str, Any] | None = None,
+) -> None:
     overall = analysis["overall"]
     top_cols = st.columns([1.1, 1.3, 2.2])
     with top_cols[0]:
@@ -802,7 +922,7 @@ def render_dashboard(company: str, financials: pd.DataFrame, analysis: dict, ant
     st.subheader("Metric Cards")
     render_metric_cards(analysis)
 
-    render_extracted_data_calculations(financials, analysis)
+    render_extracted_data_calculations(financials, analysis, extraction_context or {})
 
     chart_cols = st.columns(2)
     with chart_cols[0]:
@@ -843,9 +963,29 @@ def render_dashboard(company: str, financials: pd.DataFrame, analysis: dict, ant
     st.download_button("Download PDF report", data=pdf, file_name=f"{company.lower().replace(' ', '_')}_sme_ipo_report.pdf", mime="application/pdf")
 
 
-def render_extracted_data_calculations(financials: pd.DataFrame, analysis: dict) -> None:
-    st.subheader("Extracted Data & Calculations")
-    with st.expander("Review source data and computed formula outputs", expanded=True):
+def render_extracted_data_calculations(financials: pd.DataFrame, analysis: dict, extraction_context: dict[str, Any]) -> None:
+    st.subheader("Financial Extraction Review & Calculations")
+    with st.expander("Review extracted data, missing fields, source clues, and computed formula outputs", expanded=True):
+        uploaded_files = extraction_context.get("uploaded_files", [])
+        if uploaded_files:
+            st.markdown("**Uploaded files used for extraction**")
+            st.write(", ".join(uploaded_files))
+
+        missing_fields = extraction_context.get("missing_fields", [])
+        if missing_fields:
+            st.warning("Missing or zero-value extracted fields: " + ", ".join(missing_fields))
+        elif extraction_context:
+            st.success("All required fields have non-zero extracted values.")
+
+        sources = extraction_context.get("extraction_sources", {})
+        if sources:
+            st.markdown("**Field source clues**")
+            st.dataframe(
+                pd.DataFrame([{"Field": field, "Source": source} for field, source in sources.items()]),
+                use_container_width=True,
+                hide_index=True,
+            )
+
         st.markdown("**Extracted / entered financial data**")
         st.dataframe(financials, use_container_width=True, hide_index=True)
 
